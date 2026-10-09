@@ -89,6 +89,65 @@ export const DetectionProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   // Deduplication tracker: mapping class label -> last logged timestamp (ms)
   const lastLoggedTimesRef = useRef<Map<string, number>>(new Map());
 
+  // Helper to find the built-in laptop webcam
+  const findBestLaptopCamera = useCallback((devices: MediaDeviceInfo[]): string => {
+    if (devices.length === 0) return '';
+
+    // 1. Look for explicit built-in / integrated laptop camera
+    const integrated = devices.find(d => {
+      const label = d.label.toLowerCase();
+      const isPhoneOrVirtual =
+        label.includes('phone') ||
+        label.includes('mobile') ||
+        label.includes('droid') ||
+        label.includes('iriun') ||
+        label.includes('camo') ||
+        label.includes('virtual') ||
+        label.includes('obs') ||
+        label.includes('rear') ||
+        label.includes('back') ||
+        label.includes('link');
+
+      if (isPhoneOrVirtual) return false;
+
+      return (
+        label.includes('integrated') ||
+        label.includes('built-in') ||
+        label.includes('internal') ||
+        label.includes('front') ||
+        label.includes('facetime') ||
+        label.includes('webcam') ||
+        label.includes('hd camera') ||
+        label.includes('chicony') ||
+        label.includes('realtek') ||
+        label.includes('sunplus') ||
+        label.includes('pc camera') ||
+        label.includes('uvc')
+      );
+    });
+    if (integrated) return integrated.deviceId;
+
+    // 2. Look for any camera that is NOT a phone / virtual camera
+    const nonPhone = devices.find(d => {
+      const label = d.label.toLowerCase();
+      return !(
+        label.includes('phone') ||
+        label.includes('mobile') ||
+        label.includes('droid') ||
+        label.includes('iriun') ||
+        label.includes('camo') ||
+        label.includes('virtual') ||
+        label.includes('obs') ||
+        label.includes('rear') ||
+        label.includes('back') ||
+        label.includes('link')
+      );
+    });
+    if (nonPhone) return nonPhone.deviceId;
+
+    return devices[0].deviceId;
+  }, []);
+
   // Enumerate video devices
   const refreshCameraDevices = useCallback(async () => {
     try {
@@ -96,14 +155,16 @@ export const DetectionProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         const devices = await navigator.mediaDevices.enumerateDevices();
         const videoInputs = devices.filter(d => d.kind === 'videoinput');
         setAvailableCameras(videoInputs);
-        if (videoInputs.length > 0 && !selectedCameraId) {
-          setSelectedCameraId(videoInputs[0].deviceId);
+
+        const bestId = findBestLaptopCamera(videoInputs);
+        if (bestId && (!selectedCameraId || selectedCameraId === '')) {
+          setSelectedCameraId(bestId);
         }
       }
     } catch (e) {
       console.warn('Could not enumerate camera devices:', e);
     }
-  }, [selectedCameraId]);
+  }, [selectedCameraId, findBestLaptopCamera]);
 
   useEffect(() => {
     refreshCameraDevices();
@@ -181,13 +242,14 @@ export const DetectionProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
       let stream: MediaStream | null = null;
 
-      // Tier 1: Try with preferred constraints
+      // Tier 1: Prefer built-in laptop front-facing camera
       try {
-        const videoConstraints: MediaTrackConstraints = {};
+        const videoConstraints: MediaTrackConstraints = {
+          facingMode: { ideal: 'user' }, // Explicitly request user-facing laptop camera
+        };
+
         if (selectedCameraId) {
-          videoConstraints.deviceId = { exact: selectedCameraId };
-        } else if (settings.facingMode) {
-          videoConstraints.facingMode = settings.facingMode;
+          videoConstraints.deviceId = { ideal: selectedCameraId };
         }
 
         if (settings.cameraResolution === '1080p') {
@@ -206,11 +268,11 @@ export const DetectionProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           audio: false,
         });
       } catch (tier1Err) {
-        console.warn('Tier 1 camera constraints failed, attempting tier 2 fallback...', tier1Err);
+        console.warn('Tier 1 camera constraints failed, attempting tier 2 fallback with facingMode user...', tier1Err);
         try {
-          // Tier 2: Try basic resolution without strict facingMode
+          // Tier 2: Try facingMode: 'user' standard
           stream = await navigator.mediaDevices.getUserMedia({
-            video: selectedCameraId ? { deviceId: selectedCameraId } : { width: { ideal: 1280 }, height: { ideal: 720 } },
+            video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
             audio: false,
           });
         } catch (tier2Err) {
@@ -230,8 +292,19 @@ export const DetectionProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       setCameraStream(stream);
       setIsCameraActive(true);
       setIsDetectionPaused(false);
-      refreshCameraDevices();
-      showToast('Camera stream active. Realtime inference running.', 'success');
+
+      // Re-query devices once permission is granted to get real hardware labels
+      if (navigator.mediaDevices?.enumerateDevices) {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const videoInputs = devices.filter(d => d.kind === 'videoinput');
+        setAvailableCameras(videoInputs);
+        const bestLaptopCam = findBestLaptopCamera(videoInputs);
+        if (bestLaptopCam && !selectedCameraId) {
+          setSelectedCameraId(bestLaptopCam);
+        }
+      }
+
+      showToast('Laptop webcam active. Realtime inference running.', 'success');
     } catch (err: unknown) {
       let errorMsg = 'Failed to access camera';
       if (err instanceof DOMException) {
@@ -251,7 +324,7 @@ export const DetectionProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       setIsCameraActive(false);
       showToast(errorMsg, 'error');
     }
-  }, [cameraStream, selectedCameraId, settings.cameraResolution, settings.facingMode, refreshCameraDevices, showToast]);
+  }, [cameraStream, selectedCameraId, settings.cameraResolution, findBestLaptopCamera, showToast]);
 
   const stopCamera = useCallback(() => {
     if (cameraStream) {

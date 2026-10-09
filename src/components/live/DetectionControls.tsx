@@ -61,22 +61,43 @@ export const DetectionControls: React.FC = () => {
         {/* Camera Device Selector if available */}
         {availableCameras.length > 0 && (
           <div>
-            <label style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-main)', display: 'block', marginBottom: '0.35rem' }}>
-              Select Camera Device
-            </label>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem' }}>
+              <label style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-main)' }}>
+                Active Camera Sensor
+              </label>
+              <span className="badge badge-blue" style={{ fontSize: '0.7rem' }}>
+                {availableCameras.length} Detected
+              </span>
+            </div>
             <select
               className="select-control"
-              style={{ width: '100%' }}
+              style={{ width: '100%', fontSize: '0.82rem' }}
               value={selectedCameraId}
-              onChange={e => setSelectedCameraId(e.target.value)}
-              disabled={isCameraActive}
+              onChange={e => {
+                setSelectedCameraId(e.target.value);
+                if (isCameraActive) {
+                  stopCamera();
+                  setTimeout(() => {
+                    startCamera();
+                  }, 250);
+                }
+              }}
             >
-              {availableCameras.map((device, idx) => (
-                <option key={device.deviceId || idx} value={device.deviceId}>
-                  {device.label || `Camera Device ${idx + 1}`}
-                </option>
-              ))}
+              {availableCameras.map((device, idx) => {
+                const label = device.label || `Camera Device ${idx + 1}`;
+                const isPhone = /phone|droid|iriun|camo|mobile|virtual|link/i.test(label);
+                const isLaptop = /integrated|built-in|internal|facetime|webcam|front|chicony|realtek|hd camera/i.test(label);
+                const prefix = isLaptop ? '💻 Laptop Webcam: ' : isPhone ? '📱 Phone / Remote: ' : '📷 Video Source: ';
+                return (
+                  <option key={device.deviceId || idx} value={device.deviceId}>
+                    {prefix + label}
+                  </option>
+                );
+              })}
             </select>
+            <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', display: 'block', marginTop: '0.3rem' }}>
+              Defaults to your built-in laptop camera. Select a different source anytime.
+            </span>
           </div>
         )}
 
