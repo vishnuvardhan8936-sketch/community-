@@ -21,6 +21,9 @@ export const DetectionControls: React.FC = () => {
     settings,
     updateSettings,
     isModelLoaded,
+    availableCameras,
+    selectedCameraId,
+    setSelectedCameraId,
   } = useDetection();
 
   const [classSearch, setClassSearch] = useState('');
@@ -55,6 +58,28 @@ export const DetectionControls: React.FC = () => {
       </div>
 
       <div className="card-panel-body" style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+        {/* Camera Device Selector if available */}
+        {availableCameras.length > 0 && (
+          <div>
+            <label style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-main)', display: 'block', marginBottom: '0.35rem' }}>
+              Select Camera Device
+            </label>
+            <select
+              className="select-control"
+              style={{ width: '100%' }}
+              value={selectedCameraId}
+              onChange={e => setSelectedCameraId(e.target.value)}
+              disabled={isCameraActive}
+            >
+              {availableCameras.map((device, idx) => (
+                <option key={device.deviceId || idx} value={device.deviceId}>
+                  {device.label || `Camera Device ${idx + 1}`}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
         {/* Stream Actions */}
         <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
           {!isCameraActive ? (

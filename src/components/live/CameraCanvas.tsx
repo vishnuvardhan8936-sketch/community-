@@ -40,8 +40,17 @@ export const CameraCanvas: React.FC = () => {
 
     if (cameraStream && isCameraActive) {
       video.srcObject = cameraStream;
+      video.muted = true;
+      video.playsInline = true;
+
+      video.onloadedmetadata = () => {
+        video.play().catch(err => {
+          console.warn('Webcam video play on loadedmetadata:', err);
+        });
+      };
+
       video.play().catch(err => {
-        console.error('Error playing webcam video stream:', err);
+        console.warn('Initial webcam video play:', err);
       });
     } else {
       video.srcObject = null;
@@ -135,7 +144,9 @@ export const CameraCanvas: React.FC = () => {
     if (
       video &&
       canvas &&
-      video.readyState === 4 &&
+      video.videoWidth > 0 &&
+      video.videoHeight > 0 &&
+      video.readyState >= 2 &&
       !isDetectionPaused &&
       isModelLoaded &&
       !isInferringRef.current
@@ -218,6 +229,7 @@ export const CameraCanvas: React.FC = () => {
         className="video-element"
         playsInline
         muted
+        autoPlay
         style={{ display: isCameraActive ? 'block' : 'none' }}
       />
 

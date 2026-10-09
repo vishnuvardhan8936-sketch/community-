@@ -22,6 +22,9 @@ interface DetectionContextType {
   isCameraActive: boolean;
   isDetectionPaused: boolean;
   cameraError: string | null;
+  availableCameras: MediaDeviceInfo[];
+  selectedCameraId: string;
+  setSelectedCameraId: (id: string) => void;
   startCamera: () => Promise<void>;
   stopCamera: () => void;
   pauseDetection: () => void;
@@ -68,6 +71,8 @@ export const DetectionProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const [isCameraActive, setIsCameraActive] = useState(false);
   const [isDetectionPaused, setIsDetectionPaused] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
+  const [availableCameras, setAvailableCameras] = useState<MediaDeviceInfo[]>([]);
+  const [selectedCameraId, setSelectedCameraId] = useState<string>('');
 
   const [activeDetections, setActiveDetections] = useState<DetectedObject[]>([]);
   const [fps, setFps] = useState(0);
@@ -83,6 +88,26 @@ export const DetectionProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
   // Deduplication tracker: mapping class label -> last logged timestamp (ms)
   const lastLoggedTimesRef = useRef<Map<string, number>>(new Map());
+
+  // Enumerate video devices
+  const refreshCameraDevices = useCallback(async () => {
+    try {
+      if (navigator.mediaDevices?.enumerateDevices) {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const videoInputs = devices.filter(d => d.kind === 'videoinput');
+        setAvailableCameras(videoInputs);
+        if (videoInputs.length > 0 && !selectedCameraId) {
+          setSelectedCameraId(videoInputs[0].deviceId);
+        }
+      }
+    } catch (e) {
+      console.warn('Could not enumerate camera devices:', e);
+    }
+  }, [selectedCameraId]);
+
+  useEffect(() => {
+    refreshCameraDevices();
+  }, [refreshCameraDevices]);
 
   const showToast = useCallback((message: string, type: ToastMessage['type'] = 'info') => {
     const id = 'toast-' + Math.random().toString(36).substring(2, 9);
@@ -154,37 +179,68 @@ export const DetectionProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         cameraStream.getTracks().forEach(track => track.stop());
       }
 
-      // Configure video constraints based on settings
-      let videoConstraints: MediaTrackConstraints = {
-        facingMode: settings.facingMode,
-      };
+      let stream: MediaStream | null = null;
 
-      if (settings.cameraResolution === '1080p') {
-        videoConstraints = { ...videoConstraints, width: { ideal: 1920 }, height: { ideal: 1080 } };
-      } else if (settings.cameraResolution === '720p') {
-        videoConstraints = { ...videoConstraints, width: { ideal: 1280 }, height: { ideal: 720 } };
-      } else {
-        videoConstraints = { ...videoConstraints, width: { ideal: 640 }, height: { ideal: 480 } };
+      // Tier 1: Try with preferred constraints
+      try {
+        const videoConstraints: MediaTrackConstraints = {};
+        if (selectedCameraId) {
+          videoConstraints.deviceId = { exact: selectedCameraId };
+        } else if (settings.facingMode) {
+          videoConstraints.facingMode = settings.facingMode;
+        }
+
+        if (settings.cameraResolution === '1080p') {
+          videoConstraints.width = { ideal: 1920 };
+          videoConstraints.height = { ideal: 1080 };
+        } else if (settings.cameraResolution === '720p') {
+          videoConstraints.width = { ideal: 1280 };
+          videoConstraints.height = { ideal: 720 };
+        } else {
+          videoConstraints.width = { ideal: 640 };
+          videoConstraints.height = { ideal: 480 };
+        }
+
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: videoConstraints,
+          audio: false,
+        });
+      } catch (tier1Err) {
+        console.warn('Tier 1 camera constraints failed, attempting tier 2 fallback...', tier1Err);
+        try {
+          // Tier 2: Try basic resolution without strict facingMode
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: selectedCameraId ? { deviceId: selectedCameraId } : { width: { ideal: 1280 }, height: { ideal: 720 } },
+            audio: false,
+          });
+        } catch (tier2Err) {
+          console.warn('Tier 2 camera constraints failed, attempting tier 3 basic video: true...', tier2Err);
+          // Tier 3: Universal fallback
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: true,
+            audio: false,
+          });
+        }
       }
 
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: videoConstraints,
-        audio: false,
-      });
+      if (!stream) {
+        throw new Error('Unable to initialize webcam stream from device.');
+      }
 
       setCameraStream(stream);
       setIsCameraActive(true);
       setIsDetectionPaused(false);
+      refreshCameraDevices();
       showToast('Camera stream active. Realtime inference running.', 'success');
     } catch (err: unknown) {
       let errorMsg = 'Failed to access camera';
       if (err instanceof DOMException) {
         if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-          errorMsg = 'Camera permission was denied. Please allow camera access in your browser address bar.';
+          errorMsg = 'Camera permission was denied. Please click the Lock 🔒 icon in your browser address bar and set Camera to "Allow". Also ensure Windows Camera Privacy is ON in Windows Settings.';
         } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
-          errorMsg = 'No camera device found on your system. You can test detection via the Image Upload tab!';
+          errorMsg = 'No camera device found on your laptop. Connect a webcam or test with sample images in the Image Test Lab tab!';
         } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
-          errorMsg = 'Camera is already in use by another application or tab.';
+          errorMsg = 'Camera is in use by another program (e.g. Teams, Zoom, or another browser tab). Please close other camera apps and retry.';
         } else if (err.name === 'OverconstrainedError') {
           errorMsg = 'Requested camera resolution is not supported by your hardware.';
         }
@@ -195,7 +251,7 @@ export const DetectionProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       setIsCameraActive(false);
       showToast(errorMsg, 'error');
     }
-  }, [cameraStream, settings.cameraResolution, settings.facingMode, showToast]);
+  }, [cameraStream, selectedCameraId, settings.cameraResolution, settings.facingMode, refreshCameraDevices, showToast]);
 
   const stopCamera = useCallback(() => {
     if (cameraStream) {
@@ -292,6 +348,9 @@ export const DetectionProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         isCameraActive,
         isDetectionPaused,
         cameraError,
+        availableCameras,
+        selectedCameraId,
+        setSelectedCameraId,
         startCamera,
         stopCamera,
         pauseDetection,
